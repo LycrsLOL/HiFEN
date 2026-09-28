@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hifen"
+version = "0.1.0"
+description = "Hierarchical Function-Enhanced Network for enzyme function prediction"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "HiFEN contributors"}]
+dependencies = [
+  "numpy",
+  "pandas",
+  "pyyaml",
+  "scikit-learn",
+  "torch",
+  "torch-geometric",
+  "biopython",
+  "tqdm"
+]
+
+[project.scripts]
+hifen = "hifen.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["hifen*"]

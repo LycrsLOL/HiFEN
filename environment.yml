@@ -1,0 +1,17 @@
+name: hifen
+channels:
+  - pytorch
+  - pyg
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.10
+  - numpy
+  - pandas
+  - pyyaml
+  - scikit-learn
+  - biopython
+  - tqdm
+  - pytorch
+  - pyg
+  - mmseqs2

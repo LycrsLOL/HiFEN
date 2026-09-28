@@ -1,0 +1,8 @@
+numpy
+pandas
+pyyaml
+scikit-learn
+torch
+torch-geometric
+biopython
+tqdm
