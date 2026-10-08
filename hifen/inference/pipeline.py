@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from pathlib import Path
 
@@ -16,15 +16,16 @@ def run_mock_inference(config: dict, sequence: str, output_dir: str | None = Non
     protein_id = "mock_sequence"
     num_classes = {"ec1": 7, "ec2": 12, "ec3": 16, "ec4": 20}
     data = toy_thin_graph(num_nodes=min(max(len(sequence), 4), 32), embedding_dim=32)
-    model = HiFENModel(
-        input_dim=32,
-        hidden_dim=32,
-        num_classes=num_classes,
-        annotation_dim=12,
-        num_layers=1,
-        heads=4,
-        use_annotation_features=True,
+    model_options = dict(config.get("model", {}) or {})
+    model_options.pop("type", None)
+    model_options.update(
+        input_dim=32, hidden_dim=32, num_classes=num_classes,
+        annotation_dim=12, num_layers=2, heads=4, dropout=0.0,
+        use_annotation_features=bool(
+            (config.get("features", {}) or {}).get("use_annotation_features", True)
+        ),
     )
+    model = HiFENModel(**model_options)
     model.eval()
     with torch.no_grad():
         outputs = model(data)
@@ -50,4 +51,3 @@ def run_mock_inference(config: dict, sequence: str, output_dir: str | None = Non
     write_json(out_dir / f"{protein_id}.json", result)
     write_inference_report(out_dir / f"{protein_id}_report.md", result)
     return result
-

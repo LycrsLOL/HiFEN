@@ -1,0 +1,119 @@
+{
+  "strategy": "fixed_s2",
+  "source": "Supplementary Table S2",
+  "source_file": "supplementary data/Supplementary Table S2.xlsx",
+  "source_sha256": "f35069f03efb644b9f5ead7b53eb51eee1810023cbdc1dfd5583c15f6772e335",
+  "source_csv_sha256": "7ffe59f298faf01c9678d65b94484a2a44ff756dad9cbbee46fdee57859b5884",
+  "source_sheet": "Sheet 1",
+  "counts": {
+    "train": 104804,
+    "val": 13105,
+    "test": 13104
+  },
+  "total_records": 131013,
+  "unique_protein_ids": {
+    "train": 101236,
+    "val": 12928,
+    "test": 12916
+  },
+  "manifest_format": "graph_basename",
+  "manifest_sha256": {
+    "train": "eae37e7db7d6a2c4949054c2b52e013de9e2e0b6c89444733a88d65b2e28c84b",
+    "val": "558e2b1011d1af8a5fe3db275421b6bda75fe3824ad8fb027fe61b18e8e983ad",
+    "test": "26ae031369784b858aff06dc114b0130c4d13b5121d8eb3578fd70819c0b58c9"
+  },
+  "membership_file": "splits/s2_membership.csv",
+  "membership_sha256": "06fd2bfa5d9b1828b6e87525781f9e61cac7db7fe54ce795821e07afad04a2b7",
+  "excluded_graphs_file": "splits/s2_excluded_graphs.csv",
+  "removed_from_previous_manifests": {
+    "train": 52,
+    "val": 2,
+    "test": 3
+  },
+  "recovered_refseq_rows": 109,
+  "resolution_method": "Exact display-ID multiplicity and ordered correspondence to previous graph manifests, followed by exact graph-file matching to source CSV. Partial repeated-ID retention is rejected.",
+  "group_identifier_overlap_counts": {
+    "homology_cluster": {
+      "train/val": 0,
+      "train/test": 0,
+      "val/test": 0
+    },
+    "sequence_cluster": {
+      "train/val": 0,
+      "train/test": 0,
+      "val/test": 0
+    },
+    "uniprot_id": {
+      "train/val": 0,
+      "train/test": 0,
+      "val/test": 0
+    },
+    "source_record_id": {
+      "train/val": 0,
+      "train/test": 0,
+      "val/test": 0
+    }
+  },
+  "label_coverage": {
+    "ec1": {
+      "catalogue_classes": 7,
+      "observed_classes": {
+        "train": 7,
+        "val": 7,
+        "test": 7
+      },
+      "eligible_graphs": {
+        "train": 104804,
+        "val": 13105,
+        "test": 13104
+      },
+      "validation_labels_absent_from_training": 0,
+      "test_labels_absent_from_training": 0
+    },
+    "ec2": {
+      "catalogue_classes": 71,
+      "observed_classes": {
+        "train": 71,
+        "val": 70,
+        "test": 70
+      },
+      "eligible_graphs": {
+        "train": 104794,
+        "val": 13102,
+        "test": 13103
+      },
+      "validation_labels_absent_from_training": 0,
+      "test_labels_absent_from_training": 0
+    },
+    "ec3": {
+      "catalogue_classes": 238,
+      "observed_classes": {
+        "train": 238,
+        "val": 228,
+        "test": 226
+      },
+      "eligible_graphs": {
+        "train": 104780,
+        "val": 13100,
+        "test": 13097
+      },
+      "validation_labels_absent_from_training": 0,
+      "test_labels_absent_from_training": 0
+    },
+    "ec4": {
+      "catalogue_classes": 2120,
+      "observed_classes": {
+        "train": 2120,
+        "val": 1774,
+        "test": 1780
+      },
+      "eligible_graphs": {
+        "train": 94376,
+        "val": 11513,
+        "test": 11582
+      },
+      "validation_labels_absent_from_training": 0,
+      "test_labels_absent_from_training": 0
+    }
+  }
+}

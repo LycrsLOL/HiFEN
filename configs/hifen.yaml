@@ -1,3 +1,9 @@
+# Complete HiFEN model: four modules.
+# 1. Layerwise fusion
+# 2. Parent conditioning
+# 3. Annotation encoding (tool annotations)
+# 4. Structure completion (graph preparation)
+# Run a single-module ablation with --profile without_<module>.
 project:
   name: HiFEN
 storage:
@@ -86,7 +92,6 @@ structure_download:
 features:
   use_annotation_features: true
   annotation_feature_mode: domain_motif
-  use_site_truth_as_input: false
 graph:
   cutoff: 10.0
   dtype: float16
@@ -102,56 +107,13 @@ model:
   heads: 8
   dropout: 0.3
   edge_rbf_dim: 16
-  use_multiscale_pooling: true
   use_layerwise_fusion: true
   use_parent_conditioning: true
   detach_parent_conditioning: true
   parent_conditioning_mode: residual_gate
   parent_residual_gate_init: 0.1
-  conditional_hierarchy_mode: adaptive_residual
-  conditional_hierarchy_gate_init: 0.08
-  conditional_hierarchy_gate_max: 0.35
-  use_confidence_features: true
-  use_structure_aux_heads: false
-  use_predicted_site_feedback: true
-  detach_predicted_site_feedback: true
-  predicted_site_feedback_start_epoch: 3
-  predicted_site_feedback_warmup_epochs: 5
-  predicted_site_fusion_mode: residual_gate
-  predicted_site_gate_init: 0.1
-  predicted_site_residual_scale: 0.5
-  use_function_hypergraph: true
-  use_hypergraph_main_feedback: false
-  detach_hypergraph_site_probabilities: true
-  hypergraph_start_epoch: 8
-  hypergraph_feedback_layer: 2
-  hypergraph_slots_per_task: 1
-  hypergraph_gate_init: 0.1
-  use_conditional_hierarchy: true
-  modality_fusion_mode: learned
-  modality_dropout: 0.1
-  sequence_modality_dropout: 0.02
-  site_heads: true
-  include_structure_in_modality_fusion: false
-  hypergraph_auxiliary_head: true
-  hypergraph_tasks:
-  - active_or_catalytic_site
-  - binding_site
-  hypergraph_assignment_mode: softmax
-  hypergraph_assignment_temperature: 0.75
-  hypergraph_site_probability_threshold: 0.2
-  hypergraph_min_edge_mass: 0.1
-  hypergraph_preserve_site_confidence: true
-  hypergraph_context_mode: task_attention
-  hypergraph_confidence_power: 0.5
-  hypergraph_contrastive_context: true
-  hypergraph_min_feedback_gate: 0.05
-  hypergraph_max_feedback_gate: 0.1
-  hypergraph_warmup_epochs: 8
-  pooling_mode: hybrid
-  hybrid_pool_level_init: 0.75
+  use_function_hypergraph: false
   tool_annotation_dropout: 0.3
-  tool_annotation_fusion_mode: residual_gate
   tool_annotation_gate_init: 0.1
   tool_annotation_residual_scale: 0.5
   tool_annotation_start_epoch: 1
@@ -167,37 +129,14 @@ loss:
   - ec2
   - ec3
   - ec4
-  single_label_auxiliary_weight: 0.25
-  single_label_auxiliary_levels:
-  - ec4
-  single_label_auxiliary_class_weight: true
-  hierarchy_consistency_weight: 0.01
-  conditional_hierarchy_weight: 0.02
-  modality_balance_weight: 0.0
-  auxiliary_site_weight: 0.05
-  intermediate_site_weight: 0.05
-  site_focal_gamma: 2.0
-  site_task_weights:
-    active_or_catalytic_site: 1.0
-    binding_site: 1.0
-    domain_region: 0.25
-    motif_region: 0.25
-  site_positive_weights:
-    active_or_catalytic_site: 2.0
-    binding_site: 2.0
-    domain_region: 1.0
-    motif_region: 3.0
-  structure_aux_weight: 0.0
-  structure_distance_weight: 1.0
-  structure_contact_weight: 0.5
-  structure_contact_cutoff: 8.0
+  auxiliary_site_weight: 0.0
+  intermediate_site_weight: 0.0
   ec_level_weights:
     ec1: 0.5
     ec2: 0.8
     ec3: 1.0
     ec4: 1.3
   primary_loss: focal_bce
-  hypergraph_auxiliary_weight: 0.01
 metrics:
   async: true
   async_workers: 1
@@ -216,10 +155,10 @@ metrics:
   core_threshold_cv_folds: 3
   core_selection_score_weights:
     val_ec4_f1_macro_observed: 0.35
-    val_ec4_single_label_f1_macro: 0.20
+    val_ec4_single_label_f1_macro: 0.2
     val_ec4_auprc_micro: 0.15
-    val_ec4_low_f1_macro_observed: 0.20
-    val_ec4_low_recall_macro_observed: 0.10
+    val_ec4_low_f1_macro_observed: 0.2
+    val_ec4_low_recall_macro_observed: 0.1
   threshold_min: 0.05
   threshold_max: 0.95
   threshold_calibration_fraction: 0.2
@@ -243,6 +182,9 @@ metrics:
   full_first_epoch: false
   full_after_training_best: true
 train:
+  # Fixed S2 manifests are resolved relative to the repository (config directory's parent).
+  # Set null explicitly to generate splits for a different dataset.
+  fixed_split_dir: .
   split_strategy: homology
   homology_cluster_column: homology_cluster
   pdb_graph_selection:
@@ -331,10 +273,89 @@ swanlab:
   group: null
   tags:
   - full
-  description: Full HiFEN model training.
+  description: 'HiFEN: layerwise fusion, parent conditioning, annotation encoding,
+    structure completion.'
   log_dir: artifacts/swanlab
   fail_on_error: false
 run:
   name: hifen_full
   recommended_gpus: 2
   global_batch_size: 64
+default_profile: full
+profiles:
+  full: {}
+  without_layerwise_fusion:
+    model:
+      use_layerwise_fusion: false
+    run:
+      name: hifen_without_layerwise_fusion
+    swanlab:
+      experiment_name: hifen-without_layerwise_fusion
+      tags:
+      - without_layerwise_fusion
+      description: HiFEN without_layerwise_fusion.
+    storage:
+      checkpoint_dir: artifacts/without_layerwise_fusion/checkpoints
+      metrics_dir: artifacts/without_layerwise_fusion/metrics
+      reproducibility_dir: artifacts/without_layerwise_fusion/reproducibility
+    runtime_outputs:
+      log_dir: artifacts/without_layerwise_fusion/logs
+      inference_result_dir: artifacts/without_layerwise_fusion/predictions
+  without_parent_conditioning:
+    model:
+      use_parent_conditioning: false
+    run:
+      name: hifen_without_parent_conditioning
+    swanlab:
+      experiment_name: hifen-without_parent_conditioning
+      tags:
+      - without_parent_conditioning
+      description: HiFEN without_parent_conditioning.
+    storage:
+      checkpoint_dir: artifacts/without_parent_conditioning/checkpoints
+      metrics_dir: artifacts/without_parent_conditioning/metrics
+      reproducibility_dir: artifacts/without_parent_conditioning/reproducibility
+    runtime_outputs:
+      log_dir: artifacts/without_parent_conditioning/logs
+      inference_result_dir: artifacts/without_parent_conditioning/predictions
+  without_tool_annotations:
+    features:
+      use_annotation_features: false
+    run:
+      name: hifen_without_tool_annotations
+    swanlab:
+      experiment_name: hifen-without_tool_annotations
+      tags:
+      - without_tool_annotations
+      description: HiFEN without_tool_annotations.
+    storage:
+      checkpoint_dir: artifacts/without_tool_annotations/checkpoints
+      metrics_dir: artifacts/without_tool_annotations/metrics
+      reproducibility_dir: artifacts/without_tool_annotations/reproducibility
+    runtime_outputs:
+      log_dir: artifacts/without_tool_annotations/logs
+      inference_result_dir: artifacts/without_tool_annotations/predictions
+  without_structure_completion:
+    deployment:
+      allow_completion: false
+      pipeline_graph_after_completion: false
+    run:
+      name: hifen_without_structure_completion
+    swanlab:
+      experiment_name: hifen-without_structure_completion
+      tags:
+      - without_structure_completion
+      description: HiFEN without_structure_completion.
+    storage:
+      checkpoint_dir: artifacts/without_structure_completion/checkpoints
+      metrics_dir: artifacts/without_structure_completion/metrics
+      reproducibility_dir: artifacts/without_structure_completion/reproducibility
+      save_dir: data/without_structure_completion
+      project_artifact_dir: artifacts/without_structure_completion
+      manifest_dir: artifacts/without_structure_completion/manifests
+      graph_dir: data/without_structure_completion/train/graph
+      label_map_dir: artifacts/without_structure_completion/label_maps
+      split_dir: artifacts/without_structure_completion/splits
+    runtime_outputs:
+      log_dir: artifacts/without_structure_completion/logs
+      inference_result_dir: artifacts/without_structure_completion/predictions

@@ -38,6 +38,7 @@ except Exception:  # pragma: no cover
 
 from ..config import ensure_dirs
 from ..data.dataset import ThinGraphDataset
+from ..data.fixed_splits import fixed_split_directory, load_fixed_splits
 from ..data.ec_labels import LEVELS, encode_ec_values, parse_ec_list, split_ec_tokens
 from ..data.graph_builder import SITE_TASKS
 from ..data.label_repair import build_current_label_maps, graph_path_for_row, read_csv_rows, repair_graph_labels, save_label_maps
@@ -694,14 +695,6 @@ def _format_epoch_metrics(
     ]
     if tool_annotation_metrics:
         lines.append("  tool-anno | " + " ".join(tool_annotation_metrics))
-    modality_metrics = [
-        f"{name}={_format_metric(value)}"
-        for key, value in sorted(metrics.items())
-        if key.startswith("val_modality_weight_")
-        for name in [key.removeprefix("val_modality_weight_")]
-    ]
-    if modality_metrics:
-        lines.append("  modalities| " + " ".join(modality_metrics))
     return "\n".join(lines)
 
 
@@ -1178,6 +1171,16 @@ def load_or_create_splits(config: dict, limit: int | None = None) -> dict[str, l
     split_dir = Path(config["storage"]["split_dir"])
     split_dir.mkdir(parents=True, exist_ok=True)
     split_files = {name: split_dir / f"{name}_graphs.txt" for name in ("train", "val", "test")}
+    if fixed_split_directory(config) is not None:
+        fixed_paths, fixed_summary = load_fixed_splits(config, limit=limit)
+        if limit is None:
+            for name, paths in fixed_paths.items():
+                if not split_files[name].exists() or _read_lines(split_files[name]) != paths:
+                    _write_lines(split_files[name], paths)
+            summary_path = split_dir / "split_summary.json"
+            if not summary_path.exists() or _load_json(summary_path) != fixed_summary:
+                write_json(summary_path, fixed_summary)
+        return fixed_paths
     force_resplit = bool(train_config.get("force_resplit", False))
     graph_rows: list[tuple[dict[str, str], Path]] | None = None
 
@@ -1418,144 +1421,19 @@ def _validate_label_shapes(graph_paths: list[str], label_maps: dict[str, dict[st
                 )
 
 
-def _make_model(
-    config: dict,
-    label_maps: dict[str, dict[str, int]],
-    parent_child_maps: dict[str, list[tuple[int, int]]] | None = None,
-) -> torch.nn.Module:
-    model_config = config.get("model", {}) or {}
-    class_counts = {level: len(label_maps[level]) for level in LEVELS}
-    feature_config = config.get("features", {}) or {}
-    graph_config = config.get("graph", {}) or {}
-    return HiFENModel(
-        input_dim=int(model_config.get("input_dim", config.get("esm", {}).get("embedding_dim", 1536))),
-        hidden_dim=int(model_config.get("hidden_dim", 512)),
-        num_classes=class_counts,
-        annotation_dim=int(model_config.get("annotation_dim", 12)),
-        num_layers=int(model_config.get("num_layers", 4)),
-        heads=int(model_config.get("heads", 8)),
-        dropout=float(model_config.get("dropout", 0.3)),
-        edge_rbf_dim=int(model_config.get("edge_rbf_dim", 16)),
-        edge_cutoff=float(graph_config.get("cutoff", 10.0)),
-        use_annotation_features=bool(feature_config.get("use_annotation_features", False)),
-        site_heads=bool(model_config.get("site_heads", True)),
-        use_layerwise_fusion=bool(model_config.get("use_layerwise_fusion", True)),
-        use_parent_conditioning=bool(model_config.get("use_parent_conditioning", True)),
-        detach_parent_conditioning=bool(model_config.get("detach_parent_conditioning", False)),
-        use_confidence_features=bool(model_config.get("use_confidence_features", True)),
-        use_structure_aux_heads=bool(model_config.get("use_structure_aux_heads", True)),
-        use_predicted_site_feedback=bool(model_config.get("use_predicted_site_feedback", True)),
-        detach_predicted_site_feedback=bool(
-            model_config.get("detach_predicted_site_feedback", False)
-        ),
-        predicted_site_feedback_start_epoch=int(
-            model_config.get("predicted_site_feedback_start_epoch", 1)
-        ),
-        predicted_site_feedback_warmup_epochs=int(
-            model_config.get("predicted_site_feedback_warmup_epochs", 0)
-        ),
-        predicted_site_feedback_detach_until_epoch=int(
-            model_config.get("predicted_site_feedback_detach_until_epoch", 0)
-        ),
-        predicted_site_fusion_mode=str(
-            model_config.get("predicted_site_fusion_mode", "softmax")
-        ),
-        predicted_site_gate_init=float(
-            model_config.get("predicted_site_gate_init", 0.1)
-        ),
-        predicted_site_residual_scale=float(
-            model_config.get("predicted_site_residual_scale", 0.5)
-        ),
-        detach_hypergraph_site_probabilities=bool(
-            model_config.get("detach_hypergraph_site_probabilities", False)
-        ),
-        hypergraph_site_probabilities_detach_until_epoch=int(
-            model_config.get("hypergraph_site_probabilities_detach_until_epoch", 0)
-        ),
-        include_structure_in_modality_fusion=bool(
-            model_config.get("include_structure_in_modality_fusion", True)
-        ),
-        modality_fusion_mode=str(model_config.get("modality_fusion_mode", "learned")),
-        modality_dropout=float(model_config.get("modality_dropout", 0.1)),
-        sequence_modality_dropout=float(model_config.get("sequence_modality_dropout", 0.0)),
-        tool_annotation_dropout=(
-            None
-            if model_config.get("tool_annotation_dropout") is None
-            else float(model_config["tool_annotation_dropout"])
-        ),
-        tool_annotation_fusion_mode=str(
-            model_config.get("tool_annotation_fusion_mode", "softmax")
-        ),
-        tool_annotation_gate_init=float(model_config.get("tool_annotation_gate_init", 0.2)),
-        tool_annotation_residual_scale=float(
-            model_config.get("tool_annotation_residual_scale", 1.0)
-        ),
-        tool_annotation_start_epoch=int(
-            model_config.get("tool_annotation_start_epoch", 1)
-        ),
-        tool_annotation_warmup_epochs=int(
-            model_config.get("tool_annotation_warmup_epochs", 0)
-        ),
-        use_function_hypergraph=bool(model_config.get("use_function_hypergraph", True)),
-        hypergraph_tasks=model_config.get("hypergraph_tasks"),
-        hypergraph_feedback_layer=int(model_config.get("hypergraph_feedback_layer", 2)),
-        hypergraph_slots_per_task=int(model_config.get("hypergraph_slots_per_task", 4)),
-        hypergraph_gate_init=float(model_config.get("hypergraph_gate_init", 0.1)),
-        hypergraph_assignment_mode=str(model_config.get("hypergraph_assignment_mode", "softmax")),
-        hypergraph_assignment_temperature=float(model_config.get("hypergraph_assignment_temperature", 1.0)),
-        hypergraph_site_probability_threshold=float(
-            model_config.get("hypergraph_site_probability_threshold", 0.0)
-        ),
-        hypergraph_min_edge_mass=float(model_config.get("hypergraph_min_edge_mass", 0.0)),
-        hypergraph_preserve_site_confidence=bool(
-            model_config.get("hypergraph_preserve_site_confidence", False)
-        ),
-        hypergraph_context_mode=str(model_config.get("hypergraph_context_mode", "normalized")),
-        hypergraph_confidence_power=float(
-            model_config.get("hypergraph_confidence_power", 1.0)
-        ),
-        hypergraph_contrastive_context=bool(
-            model_config.get("hypergraph_contrastive_context", False)
-        ),
-        hypergraph_min_feedback_gate=float(
-            model_config.get("hypergraph_min_feedback_gate", 0.0)
-        ),
-        hypergraph_max_feedback_gate=float(
-            model_config.get("hypergraph_max_feedback_gate", 1.0)
-        ),
-        hypergraph_start_epoch=int(model_config.get("hypergraph_start_epoch", 1)),
-        hypergraph_warmup_epochs=int(model_config.get("hypergraph_warmup_epochs", 0)),
-        hypergraph_auxiliary_head=bool(
-            model_config.get("hypergraph_auxiliary_head", False)
-        ),
-        use_hypergraph_main_feedback=bool(
-            model_config.get("use_hypergraph_main_feedback", True)
-        ),
-        use_level_specific_pooling=bool(
-            model_config.get("use_level_specific_pooling", True)
-        ),
-        pooling_mode=model_config.get("pooling_mode"),
-        hybrid_pool_level_init=float(
-            model_config.get("hybrid_pool_level_init", 0.75)
-        ),
-        use_conditional_hierarchy=bool(model_config.get("use_conditional_hierarchy", True)),
-        parent_conditioning_mode=str(
-            model_config.get("parent_conditioning_mode", "concat")
-        ),
-        parent_residual_gate_init=float(
-            model_config.get("parent_residual_gate_init", 0.1)
-        ),
-        conditional_hierarchy_mode=str(
-            model_config.get("conditional_hierarchy_mode", "hard_product")
-        ),
-        conditional_hierarchy_gate_init=float(
-            model_config.get("conditional_hierarchy_gate_init", 0.1)
-        ),
-        conditional_hierarchy_gate_max=float(
-            model_config.get("conditional_hierarchy_gate_max", 1.0)
-        ),
-        parent_child_maps=parent_child_maps,
+def _make_model(config: dict, label_maps: dict[str, dict[str, int]]) -> torch.nn.Module:
+    model_config = dict(config.get("model", {}) or {})
+    model_type = str(model_config.pop("type", "hifen")).lower()
+    if model_type != "hifen":
+        raise ValueError(f"Unsupported model.type: {model_type!r}")
+    model_config.setdefault("input_dim", int(config.get("esm", {}).get("embedding_dim", 1536)))
+    model_config.setdefault("hidden_dim", 512)
+    model_config["num_classes"] = {level: len(label_maps[level]) for level in LEVELS}
+    model_config["use_annotation_features"] = bool(
+        (config.get("features", {}) or {}).get("use_annotation_features", True)
     )
+    model_config["edge_cutoff"] = float((config.get("graph", {}) or {}).get("cutoff", 10.0))
+    return HiFENModel(**model_config)
 
 
 def _configure_trainable_parameters(
@@ -1586,7 +1464,6 @@ def _configure_trainable_parameters(
 
 def _make_loss(
     config: dict,
-    parent_child_maps: dict[str, list[tuple[int, int]]],
     class_supports: dict[str, np.ndarray] | None = None,
     train_sample_count: int = 0,
 ) -> HierarchicalECLoss:
@@ -1596,29 +1473,15 @@ def _make_loss(
         ec_level_weights=loss_config.get("ec_level_weights"),
         focal_gamma=float(loss_config.get("focal_gamma", 2.0)),
         pos_weights=pos_weights,
-        hierarchy_weight=float(loss_config.get("hierarchy_consistency_weight", 0.0)),
-        parent_child_maps=parent_child_maps,
-        structure_aux_weight=float(loss_config.get("structure_aux_weight", 0.0)),
-        structure_distance_weight=float(loss_config.get("structure_distance_weight", 1.0)),
-        structure_contact_weight=float(loss_config.get("structure_contact_weight", 1.0)),
-        structure_contact_cutoff=float(loss_config.get("structure_contact_cutoff", 8.0)),
         auxiliary_site_weight=float(loss_config.get("auxiliary_site_weight", 0.0)),
         intermediate_site_weight=float(loss_config.get("intermediate_site_weight", 0.0)),
-        hypergraph_auxiliary_weight=float(
-            loss_config.get("hypergraph_auxiliary_weight", 0.0)
-        ),
         site_focal_gamma=float(loss_config.get("site_focal_gamma", loss_config.get("focal_gamma", 2.0))),
         site_task_weights=loss_config.get("site_task_weights"),
         site_positive_weights=loss_config.get("site_positive_weights"),
-        modality_balance_weight=float(loss_config.get("modality_balance_weight", 0.0)),
         ignore_empty_label_levels=sorted(
             {"ec2", "ec3", "ec4"}
             | {str(level) for level in loss_config.get("ignore_empty_label_levels", [])}
         ),
-        single_label_auxiliary_weight=float(loss_config.get("single_label_auxiliary_weight", 0.0)),
-        single_label_auxiliary_levels=loss_config.get("single_label_auxiliary_levels", []),
-        single_label_auxiliary_class_weight=bool(loss_config.get("single_label_auxiliary_class_weight", True)),
-        conditional_hierarchy_weight=float(loss_config.get("conditional_hierarchy_weight", 0.0)),
         primary_loss=str(loss_config.get("primary_loss", "focal_bce")),
         class_supports=class_supports,
         train_sample_count=train_sample_count,
@@ -2151,8 +2014,6 @@ def _collect_validation_outputs(
         }
         for task in SITE_TASKS
     }
-    modality_weight_sums: dict[str, float] = {}
-    modality_weight_count = 0
     hypergraph_diagnostic_sums: dict[str, float] = {}
     hypergraph_diagnostic_counts: dict[str, int] = {}
     tool_annotation_diagnostic_sums: dict[str, float] = {}
@@ -2233,13 +2094,6 @@ def _collect_validation_outputs(
                     tool_annotation_diagnostic_counts.get(str(name), 0)
                     + int(finite.sum().cpu())
                 )
-        modality_attention = outputs.get("modality_attention")
-        modality_names = outputs.get("modality_names")
-        if modality_attention is not None and modality_names is not None:
-            modality_attention = modality_attention.detach().cpu().numpy()
-            for index, name in enumerate(modality_names):
-                modality_weight_sums[str(name)] = modality_weight_sums.get(str(name), 0.0) + float(modality_attention[:, index].sum())
-            modality_weight_count += int(modality_attention.shape[0])
         if distributed.is_main and log_interval and (step % log_interval == 0 or step == len(loader)):
             logging.info(
                 "Progress | stage=validation | label=%s | batch=%05d/%05d | percent=%5.1f%%",
@@ -2256,8 +2110,6 @@ def _collect_validation_outputs(
         "targets": {level: np.concatenate(targets_by_level[level], axis=0) for level in LEVELS},
         "site_histograms": site_histograms,
         "intermediate_site_histograms": intermediate_site_histograms,
-        "modality_weight_sums": modality_weight_sums,
-        "modality_weight_count": modality_weight_count,
         "hypergraph_diagnostic_sums": hypergraph_diagnostic_sums,
         "hypergraph_diagnostic_counts": hypergraph_diagnostic_counts,
         "tool_annotation_diagnostic_sums": tool_annotation_diagnostic_sums,
@@ -2335,7 +2187,6 @@ def _compute_validation_metrics(
     sample_count = int(next(iter(targets_by_level.values())).shape[0])
     site_histograms = validation_payload.get("site_histograms", {})
     intermediate_site_histograms = validation_payload.get("intermediate_site_histograms", {})
-    modality_weight_count = int(validation_payload.get("modality_weight_count", 0))
     hypergraph_diagnostic_counts = validation_payload.get("hypergraph_diagnostic_counts", {})
     tool_annotation_diagnostic_counts = validation_payload.get(
         "tool_annotation_diagnostic_counts",
@@ -2355,7 +2206,6 @@ def _compute_validation_metrics(
         )
         + (1 if hypergraph_diagnostic_counts else 0)
         + (1 if tool_annotation_diagnostic_counts else 0)
-        + (1 if modality_weight_count > 0 else 0)
     )
     with _make_metric_progress(metric_config, label=progress_label, total=progress_total) as progress:
         if threshold_overrides is None:
@@ -2566,11 +2416,6 @@ def _compute_validation_metrics(
                         float(diagnostic_sums[name]) / int(count)
                     )
             progress.update(1)
-        if modality_weight_count > 0:
-            _set_metric_progress(progress, f"{progress_label} modality weights")
-            for name, value in validation_payload.get("modality_weight_sums", {}).items():
-                metrics[f"val_modality_weight_{name}"] = float(value) / modality_weight_count
-            progress.update(1)
     return metrics
 
 
@@ -2771,10 +2616,6 @@ def _save_validation_payload(
         arrays[f"intermediate_site_positive_{task}"] = np.asarray(histogram["positive"], dtype=np.int64)
         arrays[f"intermediate_site_negative_{task}"] = np.asarray(histogram["negative"], dtype=np.int64)
         arrays[f"intermediate_site_count_{task}"] = np.asarray([histogram["count"]], dtype=np.int64)
-    modality_weight_sums = validation_payload.get("modality_weight_sums", {})
-    arrays["modality_weight_names"] = np.asarray(list(modality_weight_sums), dtype=np.str_)
-    arrays["modality_weight_sums"] = np.asarray(list(modality_weight_sums.values()), dtype=np.float64)
-    arrays["modality_weight_count"] = np.asarray([validation_payload.get("modality_weight_count", 0)], dtype=np.int64)
     diagnostic_sums = validation_payload.get("hypergraph_diagnostic_sums", {})
     diagnostic_counts = validation_payload.get("hypergraph_diagnostic_counts", {})
     diagnostic_names = list(diagnostic_sums)
@@ -2828,8 +2669,6 @@ def _load_validation_payload(path: str | Path) -> dict[str, object]:
             for task in SITE_TASKS
             if f"intermediate_site_positive_{task}" in payload
         }
-        modality_weight_names = payload["modality_weight_names"].tolist() if "modality_weight_names" in payload else []
-        modality_weight_sums = payload["modality_weight_sums"].tolist() if "modality_weight_sums" in payload else []
         diagnostic_names = (
             payload["hypergraph_diagnostic_names"].tolist()
             if "hypergraph_diagnostic_names" in payload
@@ -2866,8 +2705,6 @@ def _load_validation_payload(path: str | Path) -> dict[str, object]:
             "targets": {level: payload[f"target_{level}"].copy() for level in LEVELS},
             "site_histograms": site_histograms,
             "intermediate_site_histograms": intermediate_site_histograms,
-            "modality_weight_sums": dict(zip(modality_weight_names, modality_weight_sums)),
-            "modality_weight_count": int(payload["modality_weight_count"][0]) if "modality_weight_count" in payload else 0,
             "hypergraph_diagnostic_sums": dict(zip(diagnostic_names, diagnostic_sums)),
             "hypergraph_diagnostic_counts": dict(zip(diagnostic_names, diagnostic_counts)),
             "tool_annotation_diagnostic_sums": dict(
@@ -3445,7 +3282,6 @@ def _load_model_checkpoint(
             level: (f"heads.{level}.3.weight", f"heads.{level}.3.bias")
             for level in LEVELS
         }
-        output_keys["ec4"] = (*output_keys["ec4"], "hypergraph_aux_head.3.weight", "hypergraph_aux_head.3.bias")
         for level, keys in output_keys.items():
             source_map = source_label_maps.get(level) or {}
             target_map = target_label_maps.get(level) or {}
@@ -3581,7 +3417,7 @@ def run_train(
         class_supports = _label_supports_from_csv(config, label_maps, split_paths["train"])
         device = _resolve_device(train_config, device_override, distributed_context)
         _log_main(distributed_context, "Stage | name=setup | status=started | action=build model | device=%s", device)
-        model = _make_model(config, label_maps, parent_child_maps).to(device)
+        model = _make_model(config, label_maps).to(device)
         if init_checkpoint:
             init_path = Path(str(init_checkpoint)).expanduser()
             init_strict = bool(train_config.get("init_checkpoint_strict", True))
@@ -3637,7 +3473,6 @@ def run_train(
             model = DistributedDataParallel(model, **ddp_kwargs)
         criterion = _make_loss(
             config,
-            parent_child_maps,
             class_supports,
             train_sample_count=len(split_paths["train"]),
         )
@@ -3864,9 +3699,7 @@ def run_train(
         early_stopped = False
         hypergraph_feedback_scale = 0.0
         tool_annotation_scale = 0.0
-        predicted_site_feedback_scale = 0.0
-        training_stage = 4
-        predicted_site_feedback_detached = False
+        training_stage = 2
         hypergraph_site_probabilities_detached = False
         for epoch in range(start_epoch, epochs + 1):
             unwrapped_model = getattr(model, "module", model)
@@ -3875,29 +3708,21 @@ def run_train(
                 tool_annotation_scale = float(
                     getattr(unwrapped_model, "tool_annotation_scale", 0.0)
                 )
-                predicted_site_feedback_scale = float(
-                    getattr(unwrapped_model, "predicted_site_feedback_scale", 0.0)
-                )
-                training_stage = int(getattr(unwrapped_model, "training_stage", 4))
+                training_stage = int(getattr(unwrapped_model, "training_stage", 2))
                 training_stage_name = str(
                     getattr(unwrapped_model, "training_stage_name", "end_to_end")
-                )
-                predicted_site_feedback_detached = bool(
-                    getattr(unwrapped_model, "detach_predicted_site_feedback", False)
                 )
                 hypergraph_site_probabilities_detached = bool(
                     getattr(unwrapped_model, "detach_hypergraph_site_probabilities", False)
                 )
                 _log_main(
                     distributed_context,
-                    "Feature curricula | epoch=%03d stage=%s:%s site_feedback_scale=%.3f hypergraph_scale=%.3f tool_scale=%.3f site_detached=%s hypergraph_sites_detached=%s lr_multiplier=%.3f",
+                    "Feature curricula | epoch=%03d stage=%s:%s hypergraph_scale=%.3f tool_scale=%.3f hypergraph_sites_detached=%s lr_multiplier=%.3f",
                     epoch,
                     training_stage,
                     training_stage_name,
-                    predicted_site_feedback_scale,
                     hypergraph_feedback_scale,
                     tool_annotation_scale,
-                    predicted_site_feedback_detached,
                     hypergraph_site_probabilities_detached,
                     _staged_lr_multiplier(train_config, epoch),
                 )
@@ -4180,12 +4005,8 @@ def run_train(
                     "optimizer/learning_rate": float(optimizer.param_groups[0]["lr"]),
                     "optimizer/stage_lr_multiplier": _staged_lr_multiplier(train_config, epoch),
                     "curriculum/stage": float(training_stage),
-                    "curriculum/predicted_site_feedback_scale": predicted_site_feedback_scale,
                     "curriculum/hypergraph_scale": hypergraph_feedback_scale,
                     "curriculum/tool_annotation_scale": tool_annotation_scale,
-                    "curriculum/predicted_site_feedback_detached": float(
-                        predicted_site_feedback_detached
-                    ),
                     "curriculum/hypergraph_site_probabilities_detached": float(
                         hypergraph_site_probabilities_detached
                     ),

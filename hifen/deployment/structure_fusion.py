@@ -281,12 +281,12 @@ def complete_structure_if_needed(
     max_anchor_rmsd: float = 8.0,
 ) -> CompletionResult | None:
     output_path = Path(output_path)
-    if output_path.exists() and not overwrite:
-        logging.info("Completed structure exists, skipping: %s", output_path)
-        return CompletionResult(output_path, "existing", 0, 0, 0, 0, None)
     if not allow_completion:
         logging.info("Completion disabled; not generating %s", output_path)
         return None
+    if output_path.exists() and not overwrite:
+        logging.info("Completed structure exists, skipping: %s", output_path)
+        return CompletionResult(output_path, "existing", 0, 0, 0, 0, None)
 
     crystal = Path(crystal_path) if crystal_path else None
     predicted = Path(predicted_path) if predicted_path else None

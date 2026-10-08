@@ -122,13 +122,13 @@ def configure_one_click_deployment(
     deployment.update(
         {
             "allow_download": True,
-            "allow_completion": True,
+            "allow_completion": bool((config.get("deployment", {}) or {}).get("allow_completion", True)),
             "allow_generate_embedding": True,
             "allow_recompute_embedding": False,
             "download_predicted_structures": True,
             "download_predicted_structure_datasets": ["train"],
             "complete_structure_datasets": ["train"],
-            "pipeline_graph_after_completion": True,
+            "pipeline_graph_after_completion": bool((config.get("deployment", {}) or {}).get("allow_completion", True)),
             "skip_resource_repair_for_existing_graph": False,
             "skip_structure_completion_for_existing_graph": False,
             "compress_structures_after_graph": False,

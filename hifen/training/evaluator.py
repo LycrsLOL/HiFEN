@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import hashlib
 import json
@@ -213,16 +213,6 @@ def format_evaluation_result(result: dict[str, object]) -> str:
         ]
         if site_metrics:
             lines.append("  sites     | " + " ".join(site_metrics))
-        modality_metrics = [
-            f"{key.removeprefix(f'{metric_prefix}_modality_weight_')}={_format_metric(value)}"
-            for key, value in sorted(metrics.items())
-            if key.startswith(f"{metric_prefix}_modality_weight_")
-        ]
-        if modality_metrics:
-            lines.append("  modalities| " + " ".join(modality_metrics))
-
-    if result.get("output_path"):
-        lines.append(f"  output     | {result['output_path']}")
     return "\n".join(lines)
 
 
@@ -293,8 +283,8 @@ def run_evaluate(config: dict, checkpoint: str | None = None, dry_run: bool = Fa
     device = _resolve_device(train_config, eval_config.get("device"), distributed)
     split_paths = load_or_create_splits(config)
     class_supports = _label_supports_from_csv(config, label_maps, split_paths["train"])
-    criterion = _make_loss(config, parent_child_maps, class_supports)
-    model = _make_model(config, label_maps, parent_child_maps).to(device)
+    criterion = _make_loss(config, class_supports)
+    model = _make_model(config, label_maps).to(device)
     checkpoint_payload = torch.load(checkpoint_path, map_location=device, weights_only=False)
     state_dict = checkpoint_payload.get("model_state_dict", checkpoint_payload)
     model.load_state_dict(state_dict)

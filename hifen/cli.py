@@ -267,7 +267,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("deploy-data")
-    p.add_argument("--config", default="configs/deploy.yaml")
+    p.add_argument("--config", default="configs/hifen.yaml")
     p.add_argument("--profile")
     p.add_argument("--train-csv", help="One-click mode: path to train_dataset.csv")
     p.add_argument("--output-dir", help="One-click mode: root directory for train embeddings, structures, graphs, and metadata")
@@ -279,7 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_deploy_data)
 
     p = sub.add_parser("train")
-    p.add_argument("--config", default="configs/train.yaml")
+    p.add_argument("--config", default="configs/hifen.yaml")
     p.add_argument("--profile")
     p.add_argument(
         "--dataset",
@@ -307,14 +307,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_train)
 
     p = sub.add_parser("evaluate")
-    p.add_argument("--config", default="configs/evaluate.yaml")
+    p.add_argument("--config", default="configs/hifen.yaml")
     p.add_argument("--profile")
     p.add_argument("--checkpoint")
     p.add_argument("--dry-run", action="store_true")
     p.set_defaults(func=cmd_evaluate)
 
     p = sub.add_parser("infer")
-    p.add_argument("--config", default="configs/infer.yaml")
+    p.add_argument("--config", default="configs/hifen.yaml")
     p.add_argument("--profile")
     p.add_argument("--checkpoint")
     p.add_argument("--sequence")
@@ -323,7 +323,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_infer)
 
     p = sub.add_parser("export-reproducibility")
-    p.add_argument("--config", default="configs/train.yaml")
+    p.add_argument("--config", default="configs/hifen.yaml")
     p.add_argument("--profile")
     p.add_argument("--output")
     p.set_defaults(func=cmd_export_repro)

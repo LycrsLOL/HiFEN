@@ -160,8 +160,11 @@ def _select_structure(
     exact: dict[tuple[str, str, str, str], list[str]],
     by_uniprot: dict[tuple[str, str, str], list[str]],
     predicted_only: bool = False,
+    allow_completed: bool = True,
 ) -> str | None:
-    resources = ("predicted",) if predicted_only else ("complete", "crystal", "predicted")
+    resources = ("predicted",) if predicted_only else (
+        ("complete", "crystal", "predicted") if allow_completed else ("crystal", "predicted")
+    )
     for resource in resources:
         if pdb_id:
             found = _first_existing(exact.get((dataset, resource, uniprot_id, pdb_id.lower()), []))
@@ -625,36 +628,18 @@ def _annotation_features(
     sequence_positions: list[int] | None = None,
     *,
     annotation_feature_mode: str = "domain_motif",
-    use_site_truth_as_input: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     parsed = parse_annotation_row(row)
     annotation_x, annotation_mask = empty_annotation(num_nodes, ANNOTATION_DIM)
     mode = str(annotation_feature_mode or "none").strip().lower()
-    if mode not in {"none", "domain_motif", "all"}:
+    if mode not in {"none", "domain_motif"}:
         raise ValueError(f"Unsupported annotation_feature_mode: {annotation_feature_mode}")
     if mode == "none":
         return annotation_x, annotation_mask
 
-    include_site_truth = mode == "all" and bool(use_site_truth_as_input)
-    missing_active = not parsed.active_sites and not parsed.catalytic_sites
-    missing_binding = not parsed.binding_sites
     missing_domain = not parsed.domain_regions
     missing_motif = not parsed.motif_regions
     annotation_input_available = _annotation_input_available(row, parsed)
-
-    def mark_points(points: Iterable[int], channel: int) -> None:
-        point_set = {int(point) for point in points}
-        if sequence_positions is not None:
-            for idx, position in enumerate(sequence_positions):
-                if int(position) in point_set:
-                    annotation_x[idx, channel] = 1.0
-                    annotation_mask[idx, channel] = 1.0
-        else:
-            for point in point_set:
-                idx = int(point) - 1
-                if 0 <= idx < num_nodes:
-                    annotation_x[idx, channel] = 1.0
-                    annotation_mask[idx, channel] = 1.0
 
     def mark_regions(regions: Iterable[tuple[int, int, str | None]], channel: int) -> None:
         for start, end, _ in regions:
@@ -672,18 +657,10 @@ def _annotation_features(
                     annotation_x[lo:hi, channel] = 1.0
                     annotation_mask[lo:hi, channel] = 1.0
 
-    if include_site_truth:
-        mark_points(parsed.active_sites, 0)
-        mark_points(parsed.catalytic_sites, 1)
-        mark_points(parsed.binding_sites, 2)
     if annotation_input_available:
         mark_regions(parsed.domain_regions, 3)
         mark_regions(parsed.motif_regions, 4)
 
-    if include_site_truth:
-        annotation_x[:, 8] = 1.0 if missing_active else 0.0
-        annotation_x[:, 9] = 1.0 if missing_binding else 0.0
-        annotation_mask[:, 8:10] = 1.0
     if annotation_input_available:
         annotation_x[:, 10] = 1.0 if missing_domain else 0.0
         annotation_x[:, 11] = 1.0 if missing_motif else 0.0
@@ -778,7 +755,10 @@ def _direct_embedding_path(root: Path, uniprot_id: str, pdb_id: str | None) -> s
     return found
 
 
-def _direct_structure_path(root: Path, uniprot_id: str, pdb_id: str | None, predicted_only: bool = False) -> str | None:
+def _direct_structure_path(
+    root: Path, uniprot_id: str, pdb_id: str | None,
+    predicted_only: bool = False, allow_completed: bool = True,
+) -> str | None:
     candidates: list[Path] = []
     complete_dir = root / "complete"
     crystal_dir = root / "crystal"
@@ -787,12 +767,14 @@ def _direct_structure_path(root: Path, uniprot_id: str, pdb_id: str | None, pred
         if pdb_id:
             pdb_lower = pdb_id.lower()
             for suffix in (".pdb", ".cif", ".mmcif"):
-                candidates.append(complete_dir / f"{uniprot_id}_{pdb_id}{suffix}")
-                candidates.append(complete_dir / f"{uniprot_id}_{pdb_lower}{suffix}")
+                if allow_completed:
+                    candidates.append(complete_dir / f"{uniprot_id}_{pdb_id}{suffix}")
+                    candidates.append(complete_dir / f"{uniprot_id}_{pdb_lower}{suffix}")
                 candidates.append(crystal_dir / f"{uniprot_id}_{pdb_lower}{suffix}")
                 candidates.append(crystal_dir / f"{uniprot_id}_{pdb_id}{suffix}")
-        for suffix in (".pdb", ".cif", ".mmcif"):
-            candidates.append(complete_dir / f"{uniprot_id}{suffix}")
+        if allow_completed:
+            for suffix in (".pdb", ".cif", ".mmcif"):
+                candidates.append(complete_dir / f"{uniprot_id}{suffix}")
     for suffix in (".pdb", ".cif", ".mmcif"):
         candidates.append(predicted_dir / f"{uniprot_id}{suffix}")
     return _first_existing(str(path) for path in candidates)
@@ -822,10 +804,10 @@ class ThinGraphBuildSession:
         self.min_aligned_fraction = float(graph_config.get("min_structure_alignment_fraction", 0.8))
         feature_config = config.get("features", {}) or {}
         self.annotation_feature_mode = str(feature_config.get("annotation_feature_mode", "domain_motif"))
-        self.use_site_truth_as_input = bool(feature_config.get("use_site_truth_as_input", False))
         storage_config = config.get("storage", {}) or {}
         self.deployment_config = config.get("deployment", {}) or {}
         self.predicted_structure_only = bool(self.deployment_config.get("predicted_structure_only", False))
+        self.allow_completed = bool(self.deployment_config.get("allow_completion", True))
         self.save_embedding_in_graph = bool(storage_config.get("save_embedding_in_graph", False))
         self.graph_feature_dtype = _graph_feature_dtype(config)
         self.allow_transient_embedding = self.save_embedding_in_graph and bool(self.deployment_config.get("allow_generate_embedding", False))
@@ -899,9 +881,9 @@ class ThinGraphBuildSession:
             embedding_path = _select_embedding(dataset, uniprot_id, pdb_id, self.exact, self.by_uniprot)
             if not embedding_path:
                 embedding_path = _direct_embedding_path(root, uniprot_id, pdb_id)
-            structure_path = _direct_structure_path(root, uniprot_id, pdb_id, predicted_only=self.predicted_structure_only)
+            structure_path = _direct_structure_path(root, uniprot_id, pdb_id, predicted_only=self.predicted_structure_only, allow_completed=self.allow_completed)
             if not structure_path:
-                structure_path = _select_structure(dataset, uniprot_id, pdb_id, self.exact, self.by_uniprot, predicted_only=self.predicted_structure_only)
+                structure_path = _select_structure(dataset, uniprot_id, pdb_id, self.exact, self.by_uniprot, predicted_only=self.predicted_structure_only, allow_completed=self.allow_completed)
             if not structure_path:
                 self.stats["missing_structure"] += 1
                 return False
@@ -949,7 +931,6 @@ class ThinGraphBuildSession:
                         coords.shape[0],
                         sequence_positions=sequence_positions,
                         annotation_feature_mode=self.annotation_feature_mode,
-                        use_site_truth_as_input=self.use_site_truth_as_input,
                     )
                     site_targets, site_target_mask = _annotation_targets(row, coords.shape[0], sequence_positions=sequence_positions)
                     alignment_metadata: dict[str, Any] = {
@@ -979,7 +960,6 @@ class ThinGraphBuildSession:
                         row,
                         coords.shape[0],
                         annotation_feature_mode=self.annotation_feature_mode,
-                        use_site_truth_as_input=self.use_site_truth_as_input,
                     )
                     site_targets, site_target_mask = _annotation_targets(row, coords.shape[0])
                     alignment_metadata = {}
@@ -1008,7 +988,6 @@ class ThinGraphBuildSession:
                     "node_confidence_source": node_confidence_source,
                     "annotation_schema_version": 4,
                     "annotation_feature_mode": self.annotation_feature_mode,
-                    "site_truth_as_input": self.use_site_truth_as_input,
                     "annotation_available": _annotation_input_available(row),
                     "tool_annotation_available": _annotation_input_available(row),
                     "annotation_provenance_json": json.dumps(
@@ -1143,10 +1122,10 @@ def prepare_thin_graphs(
     min_aligned_fraction = float(graph_config.get("min_structure_alignment_fraction", 0.8))
     feature_config = config.get("features", {}) or {}
     annotation_feature_mode = str(feature_config.get("annotation_feature_mode", "domain_motif"))
-    use_site_truth_as_input = bool(feature_config.get("use_site_truth_as_input", False))
     storage_config = config.get("storage", {}) or {}
     deployment_config = config.get("deployment", {}) or {}
     predicted_structure_only = bool(deployment_config.get("predicted_structure_only", False))
+    allow_completed = bool(deployment_config.get("allow_completion", True))
     save_embedding_in_graph = bool(storage_config.get("save_embedding_in_graph", False))
     graph_feature_dtype = _graph_feature_dtype(config)
     allow_transient_embedding = save_embedding_in_graph and bool(deployment_config.get("allow_generate_embedding", False))
@@ -1243,9 +1222,9 @@ def prepare_thin_graphs(
                 stats["skipped_existing"] += 1
                 continue
             embedding_path = _select_embedding(dataset, uniprot_id, pdb_id, exact, by_uniprot)
-            structure_path = _select_structure(dataset, uniprot_id, pdb_id, exact, by_uniprot, predicted_only=predicted_structure_only)
+            structure_path = _select_structure(dataset, uniprot_id, pdb_id, exact, by_uniprot, predicted_only=predicted_structure_only, allow_completed=allow_completed)
             if not structure_path:
-                structure_path = _direct_structure_path(save_dir / output_subdir, uniprot_id, pdb_id, predicted_only=predicted_structure_only)
+                structure_path = _direct_structure_path(save_dir / output_subdir, uniprot_id, pdb_id, predicted_only=predicted_structure_only, allow_completed=allow_completed)
             if not structure_path:
                 stats["missing_structure"] += 1
                 continue
@@ -1297,7 +1276,6 @@ def prepare_thin_graphs(
                         coords.shape[0],
                         sequence_positions=sequence_positions,
                         annotation_feature_mode=annotation_feature_mode,
-                        use_site_truth_as_input=use_site_truth_as_input,
                     )
                     site_targets, site_target_mask = _annotation_targets(
                         row,
@@ -1331,7 +1309,6 @@ def prepare_thin_graphs(
                         row,
                         coords.shape[0],
                         annotation_feature_mode=annotation_feature_mode,
-                        use_site_truth_as_input=use_site_truth_as_input,
                     )
                     site_targets, site_target_mask = _annotation_targets(row, coords.shape[0])
                     alignment_metadata = {}
@@ -1360,7 +1337,6 @@ def prepare_thin_graphs(
                     "node_confidence_source": node_confidence_source,
                     "annotation_schema_version": 4,
                     "annotation_feature_mode": annotation_feature_mode,
-                    "site_truth_as_input": use_site_truth_as_input,
                     "annotation_available": _annotation_input_available(row),
                     "tool_annotation_available": _annotation_input_available(row),
                     "annotation_provenance_json": json.dumps(
